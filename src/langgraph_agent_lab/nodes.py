@@ -6,98 +6,130 @@ input state in place.
 
 from __future__ import annotations
 
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from .state import AgentState, ApprovalDecision, Route, make_event
+
+# Module-level classification constants to prevent N806 lint alerts
+RISKY_KW = frozenset({"refund", "delete", "send", "cancel", "remove", "revoke"})
+TOOL_KW = frozenset({"status", "order", "lookup", "check", "track", "find", "search"})
+ERROR_KW = frozenset({"timeout", "fail", "error", "crash", "unavailable", "failure"})
 
 
 def intake_node(state: AgentState) -> dict:
-    """Normalize raw query into state fields.
-
-    TODO(student): add normalization, PII checks, and metadata extraction.
-    """
+    """Normalize raw query into state fields."""
+    t0 = time.monotonic()
     query = state.get("query", "").strip()
+    
+    latency_ms = int((time.monotonic() - t0) * 1000)
     return {
         "query": query,
         "messages": [f"intake:{query[:40]}"],
+        "latency_log": [{"node": "intake", "latency_ms": latency_ms}],
         "events": [make_event("intake", "completed", "query normalized")],
     }
 
 
 def classify_node(state: AgentState) -> dict:
-    """Classify the query into a route.
-
-    TODO(student): replace keyword heuristics with a clear routing policy.
-    Required routes: simple, tool, missing_info, risky, error.
-    """
+    """Classify the query into a route with strong keyword-based heuristic logic."""
+    t0 = time.monotonic()
     query = state.get("query", "").lower()
-    words = query.split()
-    clean_words = [w.strip("?!.,;:") for w in words]
+    
+    # Word boundary extraction by stripping common punctuation symbols and splitting
+    words = set(re.sub(r"[?!.,;:]", "", query).split())
+    
     route = Route.SIMPLE
     risk_level = "low"
-    if "refund" in query or "delete" in query or "send" in query:
-        route = Route.RISKY
-        risk_level = "high"
-    elif "status" in query or "order" in query or "lookup" in query:
-        route = Route.TOOL
-    elif len(clean_words) < 5 and "it" in clean_words:
-        route = Route.MISSING_INFO
-    elif "timeout" in query or "fail" in query:
-        route = Route.ERROR
+    
+    if words & RISKY_KW:
+        route, risk_level = Route.RISKY, "high"
+    elif words & TOOL_KW:
+        route, risk_level = Route.TOOL, "medium"
+    elif len(words) < 5 and "it" in words:
+        route, risk_level = Route.MISSING_INFO, "low"
+    elif words & ERROR_KW:
+        route, risk_level = Route.ERROR, "medium"
+        
+    latency_ms = int((time.monotonic() - t0) * 1000)
     return {
         "route": route.value,
         "risk_level": risk_level,
+        "latency_log": [{"node": "classify", "latency_ms": latency_ms}],
         "events": [make_event("classify", "completed", f"route={route.value}")],
     }
 
 
 def ask_clarification_node(state: AgentState) -> dict:
-    """Ask for missing information instead of hallucinating.
-
-    TODO(student): generate a specific clarification question from state.
-    """
+    """Ask for missing information instead of hallucinating."""
+    t0 = time.monotonic()
     question = "Can you provide the order id or the missing context?"
+    latency_ms = int((time.monotonic() - t0) * 1000)
     return {
         "pending_question": question,
         "final_answer": question,
+        "latency_log": [{"node": "clarify", "latency_ms": latency_ms}],
         "events": [make_event("clarify", "completed", "missing information requested")],
     }
 
 
-def tool_node(state: AgentState) -> dict:
-    """Call a mock tool.
 
-    Simulates transient failures for error-route scenarios to demonstrate retry loops.
-    TODO(student): implement idempotent tool execution and structured tool results.
-    """
+
+
+def tool_node(state: AgentState) -> dict:
+    """Call multiple mock tools in parallel."""
+    t0 = time.monotonic()
     attempt = int(state.get("attempt", 0))
-    if state.get("route") == Route.ERROR.value and attempt < 2:
-        result = f"ERROR: transient failure attempt={attempt} scenario={state.get('scenario_id', 'unknown')}"
-    else:
-        result = f"mock-tool-result for scenario={state.get('scenario_id', 'unknown')}"
+    scenario_id = state.get("scenario_id", "unknown")
+    route = state.get("route")
+
+    def run_main_tool() -> str:
+        time.sleep(0.05) # mock io latency
+        if route == Route.ERROR.value and attempt < 2:
+             return f"ERROR: transient failure attempt={attempt} scenario={scenario_id}"
+        return f"mock-tool-main-result for scenario={scenario_id}"
+
+    def run_audit_tool() -> str:
+        time.sleep(0.03) # mock io latency
+        return f"mock-tool-audit-record for scenario={scenario_id}"
+
+    results = []
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = {
+            executor.submit(run_main_tool): "main_tool",
+            executor.submit(run_audit_tool): "audit_tool"
+        }
+        for future in as_completed(futures):
+            try:
+                results.append(future.result())
+            except Exception as e:
+                results.append(f"ERROR: {futures[future]} execution crashed: {str(e)}")
+    
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    combined_output = " | ".join(results)
+    
     return {
-        "tool_results": [result],
-        "events": [make_event("tool", "completed", f"tool executed attempt={attempt}")],
+        "tool_results": [combined_output],
+        "latency_log": [{"node": "tool", "latency_ms": latency_ms}],
+        "events": [make_event("tool", "completed", f"parallel tools executed attempt={attempt}")],
     }
 
 
 def risky_action_node(state: AgentState) -> dict:
-    """Prepare a risky action for approval.
-
-    TODO(student): create a proposed action with evidence and risk justification.
-    """
+    """Prepare a risky action for approval."""
+    t0 = time.monotonic()
+    latency_ms = int((time.monotonic() - t0) * 1000)
     return {
         "proposed_action": "prepare refund or external action; approval required",
+        "latency_log": [{"node": "risky_action", "latency_ms": latency_ms}],
         "events": [make_event("risky_action", "pending_approval", "approval required")],
     }
 
 
 def approval_node(state: AgentState) -> dict:
-    """Human approval step with optional LangGraph interrupt().
-
-    Set LANGGRAPH_INTERRUPT=true to use real interrupt() for HITL demos.
-    Default uses mock decision so tests and CI run offline.
-
-    TODO(student): implement reject/edit decisions and timeout escalation.
-    """
+    """Human approval step with optional LangGraph interrupt()."""
+    t0 = time.monotonic()
     import os
 
     if os.getenv("LANGGRAPH_INTERRUPT", "").lower() == "true":
@@ -113,71 +145,86 @@ def approval_node(state: AgentState) -> dict:
             decision = ApprovalDecision(approved=bool(value))
     else:
         decision = ApprovalDecision(approved=True, comment="mock approval for lab")
+        
+    latency_ms = int((time.monotonic() - t0) * 1000)
     return {
         "approval": decision.model_dump(),
+        "latency_log": [{"node": "approval", "latency_ms": latency_ms}],
         "events": [make_event("approval", "completed", f"approved={decision.approved}")],
     }
 
 
 def retry_or_fallback_node(state: AgentState) -> dict:
-    """Record a retry attempt or fallback decision.
-
-    TODO(student): implement bounded retry, exponential backoff metadata, and fallback route.
-    """
+    """Record a retry attempt."""
+    t0 = time.monotonic()
     attempt = int(state.get("attempt", 0)) + 1
     errors = [f"transient failure attempt={attempt}"]
+    latency_ms = int((time.monotonic() - t0) * 1000)
     return {
         "attempt": attempt,
         "errors": errors,
+        "latency_log": [{"node": "retry", "latency_ms": latency_ms}],
         "events": [make_event("retry", "completed", "retry attempt recorded", attempt=attempt)],
     }
 
 
 def answer_node(state: AgentState) -> dict:
-    """Produce a final response.
-
-    TODO(student): ground the answer in tool_results and approval where relevant.
-    """
+    """Produce a final response."""
+    t0 = time.monotonic()
     if state.get("tool_results"):
         answer = f"I found: {state['tool_results'][-1]}"
     else:
         answer = "This is a safe mock answer. Replace with your agent response."
+    latency_ms = int((time.monotonic() - t0) * 1000)
     return {
         "final_answer": answer,
+        "latency_log": [{"node": "answer", "latency_ms": latency_ms}],
         "events": [make_event("answer", "completed", "answer generated")],
     }
 
 
 def evaluate_node(state: AgentState) -> dict:
-    """Evaluate tool results — the 'done?' check that enables retry loops.
-
-    TODO(student): replace heuristic with LLM-as-judge or structured validation.
-    """
-    tool_results = state.get("tool_results", [])
+    """Evaluate tool results — the 'done?' check that enables retry loops."""
+    t0 = time.monotonic()
+    tool_results = state.get("tool_results", []) or []
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    
     latest = tool_results[-1] if tool_results else ""
-    if "ERROR" in latest:
+    has_failure = "ERROR" in str(latest)
+    
+    if has_failure:
         return {
             "evaluation_result": "needs_retry",
-            "events": [make_event("evaluate", "completed", "tool result indicates failure, retry needed")],
+            "latency_log": [{"node": "evaluate", "latency_ms": latency_ms}],
+            "events": [make_event(
+                "evaluate", "completed", "latest tool result contains failure, retry triggered"
+            )],
         }
     return {
         "evaluation_result": "success",
+        "latency_log": [{"node": "evaluate", "latency_ms": latency_ms}],
         "events": [make_event("evaluate", "completed", "tool result satisfactory")],
     }
 
 
 def dead_letter_node(state: AgentState) -> dict:
-    """Log unresolvable failures for manual review.
-
-    Third layer of error strategy: retry -> fallback -> dead letter.
-    TODO(student): persist to dead-letter queue, alert on-call, or create support ticket.
-    """
+    """Log unresolvable failures for manual review."""
+    t0 = time.monotonic()
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    ans = "Request could not be completed after maximum retry attempts. Logged for manual review."
+    atpt = state.get('attempt', 0)
     return {
-        "final_answer": "Request could not be completed after maximum retry attempts. Logged for manual review.",
-        "events": [make_event("dead_letter", "completed", f"max retries exceeded, attempt={state.get('attempt', 0)}")],
+        "final_answer": ans,
+        "latency_log": [{"node": "dead_letter", "latency_ms": latency_ms}],
+        "events": [make_event("dead_letter", "completed", f"max retries exceeded, attempt={atpt}")],
     }
 
 
 def finalize_node(state: AgentState) -> dict:
     """Finalize the run and emit a final audit event."""
-    return {"events": [make_event("finalize", "completed", "workflow finished")]}
+    t0 = time.monotonic()
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    return {
+        "latency_log": [{"node": "finalize", "latency_ms": latency_ms}],
+        "events": [make_event("finalize", "completed", "workflow finished")]
+    }

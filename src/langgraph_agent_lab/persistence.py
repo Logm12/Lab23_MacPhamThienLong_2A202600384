@@ -19,14 +19,24 @@ def build_checkpointer(kind: str = "memory", database_url: str | None = None) ->
         return MemorySaver()
     if kind == "sqlite":
         try:
+            import sqlite3
+
             from langgraph.checkpoint.sqlite import SqliteSaver
         except ImportError as exc:
-            raise RuntimeError("SQLite checkpointer requires: pip install langgraph-checkpoint-sqlite") from exc
-        return SqliteSaver.from_conn_string(database_url or "checkpoints.db")
+            msg = "SQLite checkpointer requires: pip install langgraph-checkpoint-sqlite"
+            raise RuntimeError(msg) from exc
+        conn = sqlite3.connect(database_url or "lab.db", check_same_thread=False)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+        except sqlite3.OperationalError:
+            # Handle filesystem incompatibility in Docker volume mounts on some hosts
+            pass
+        return SqliteSaver(conn)
     if kind == "postgres":
         try:
-            from langgraph.checkpoint.postgres import PostgresSaver
+            from langgraph.checkpoint.postgres import PostgresSaver  # type: ignore[import-not-found]
         except ImportError as exc:
-            raise RuntimeError("Postgres checkpointer requires: pip install langgraph-checkpoint-postgres") from exc
+            msg = "Postgres checkpointer requires: pip install langgraph-checkpoint-postgres"
+            raise RuntimeError(msg) from exc
         return PostgresSaver.from_conn_string(database_url or "")
     raise ValueError(f"Unknown checkpointer kind: {kind}")

@@ -48,4 +48,4 @@ def route_after_approval(state: AgentState) -> str:
     TODO(student): support reject/edit outcomes.
     """
     approval = state.get("approval") or {}
-    return "tool" if approval.get("approved") else "clarify"
+    return "tool" if approval.get("approved") else "dead_letter"

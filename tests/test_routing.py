@@ -1,4 +1,9 @@
-from langgraph_agent_lab.routing import route_after_approval, route_after_classify, route_after_evaluate, route_after_retry
+from langgraph_agent_lab.routing import (
+    route_after_approval,
+    route_after_classify,
+    route_after_evaluate,
+    route_after_retry,
+)
 from langgraph_agent_lab.state import Route
 
 
@@ -10,7 +15,7 @@ def test_route_after_classify():
 
 def test_route_after_approval():
     assert route_after_approval({"approval": {"approved": True}}) == "tool"
-    assert route_after_approval({"approval": {"approved": False}}) == "clarify"
+    assert route_after_approval({"approval": {"approved": False}}) == "dead_letter"
 
 
 def test_route_after_retry_bound():

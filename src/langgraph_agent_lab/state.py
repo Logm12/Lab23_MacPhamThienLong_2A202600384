@@ -6,9 +6,9 @@ Students should extend the schema only when needed. Keep state lean and serializ
 from __future__ import annotations
 
 from enum import StrEnum
+from operator import add
 from typing import Annotated, Any, TypedDict
 
-from operator import add
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -61,6 +61,7 @@ class AgentState(TypedDict, total=False):
     tool_results: Annotated[list[str], add]
     errors: Annotated[list[str], add]
     events: Annotated[list[dict[str, Any]], add]
+    latency_log: Annotated[list[dict[str, Any]], add]
 
 
 class Scenario(BaseModel):
@@ -99,9 +100,11 @@ def initial_state(scenario: Scenario) -> AgentState:
         "tool_results": [],
         "errors": [],
         "events": [],
+        "latency_log": [],
     }
 
 
 def make_event(node: str, event_type: str, message: str, **metadata: Any) -> dict[str, Any]:
     """Create a normalized event payload."""
-    return LabEvent(node=node, event_type=event_type, message=message, metadata=metadata).model_dump()
+    evt = LabEvent(node=node, event_type=event_type, message=message, metadata=metadata)
+    return evt.model_dump()

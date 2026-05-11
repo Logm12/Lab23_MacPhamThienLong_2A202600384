@@ -44,3 +44,11 @@ Thumbs.db
 # Hidden grading — do NOT distribute to students
 data/grading/
 configs/grading.yaml
+
+# Output databases & journals (Local cache)
+outputs/lab.db
+outputs/lab.db-wal
+outputs/lab.db-shm
+lab.db
+lab.db-wal
+lab.db-shm

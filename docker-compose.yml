@@ -12,3 +12,19 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  agent:
+    build: .
+    volumes:
+      - ./outputs:/app/outputs
+      - ./reports:/app/reports
+    environment:
+      - LANGGRAPH_INTERRUPT=false
+
+  streamlit:
+    build: .
+    command: ["python", "-m", "streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    ports:
+      - "8501:8501"
+    environment:
+      - LANGGRAPH_INTERRUPT=false
